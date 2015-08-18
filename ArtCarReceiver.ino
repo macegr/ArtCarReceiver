@@ -1,20 +1,20 @@
-// Art Car 2011
+// Art Car Drive-by-Wire
 // Receiver Module
+// Input: RS485 commands
+// Output: Steering (RC servo protocol), brakes (RC servo protocol), throttle (PWM)
 // Garrett Mace
-
-
-#define debugMode 0
 
 // Included libraries
 #include <Servo.h>
 
-
 // Steering output range
+// 1000 to 2000 microseconds is full RC servo range
 #define steerMax 2000
 #define steerMin 1000
 #define steerDefault 1500
 
 // Braking output range
+// 1000 to 2000 microseconds is full RC servo range
 #define brakeMax 2000
 #define brakeMin 1000
 #define brakeDefault 1000
@@ -31,7 +31,6 @@
 #define enableRS485 2
 #define statusLED 10
 
-
 // Object declaration
 Servo steerServo;
 Servo brakeServo;
@@ -40,35 +39,13 @@ Servo brakeServo;
 int steerValue = 0;
 int brakeValue = 0;
 int throttleValue = 0;
-String ack = char(0x02) + String("OK") + char(0x03);
 long activityLEDTimer = 0;
 int activityFlag = 0;
-
 unsigned long watchdogTimer = 0;
 int errorLEDCount = 0;
 byte watchdog = 1;
 
-
-// Initialize sequence
-void setup()
-{
-  steerServo.attach(steerPin); // Activate steering servo
-  brakeServo.attach(brakePin); // Activate brake servo
- 
-  Serial.begin(57600); // Activate serial port
-
-  // Communication status LED
-  pinMode(statusLED, OUTPUT);
-  digitalWrite(statusLED,HIGH);
-
-  // RS485 flow control pin
-  pinMode(enableRS485, OUTPUT);
-  digitalWrite(enableRS485, LOW);
-
-  // Throttle output pin
-  analogWrite(throttlePin, 0);
-  
-}
+String ack = char(0x02) + String("OK") + char(0x03);
 
 // Receive buffer size
 #define recvMax 14
@@ -84,6 +61,31 @@ byte recvBuffer[recvMax] = {0};
   #define ERROR 5
 
 int packetState = IDLE;
+
+
+// Initialize sequence
+void setup()
+{
+  // Activate servo outputs
+  steerServo.attach(steerPin);
+  brakeServo.attach(brakePin);
+
+  // Activate serial port
+  Serial.begin(57600);
+
+  // Communication status LED
+  pinMode(statusLED, OUTPUT);
+  digitalWrite(statusLED,HIGH);
+
+  // RS485 flow control pin
+  pinMode(enableRS485, OUTPUT);
+  digitalWrite(enableRS485, LOW);
+
+  // Throttle output pin
+  analogWrite(throttlePin, 0);
+  
+}
+
 
 
 // Run CRC on the received data for integrity check
@@ -126,13 +128,13 @@ void checkRS485()
       if (tempByte == 0x03) {
         byte checksum = (hex2dec(recvBuffer[recvIndex-2]))*16 + hex2dec(recvBuffer[recvIndex-1]);
         recvBuffer[12] = checksum;
-        
         if (doChecksum() == checksum) {
           packetState = RXDONE;                 
         } else {
           packetState = ERROR;
         }
-        // receive data
+      
+      // receive data
       } else if (recvIndex < recvMax) {
         recvBuffer[recvIndex] = tempByte;
         recvIndex++;
@@ -173,13 +175,14 @@ void writeOutputs() {
 
     // Write brake value to the brake servo controller
     brakeValue = getPacketValue(1);
-    
+
+    // Enforce brake position limits
     if (brakeValue > brakeMax) {
       brakeValue = brakeMax;
     } else if (brakeValue < brakeMin) {
       brakeValue = brakeMin;
     }
-    
+
     brakeServo.write(brakeValue);
 
     // Write steering value to the steering servo controller
@@ -196,29 +199,23 @@ void writeOutputs() {
   
 }
 
-
-
-
-
-
+// Shut down if valid communications not detected for 200ms
+// Turn off throttle, brakes, and steering to prevent damage
 void checkWatchdog() {
 
   // Watch for communication disruption
   if (millis() - watchdogTimer > 200) { // Trigger watchdog if no valid data in 200ms
       watchdog = 1;
-      // steerServo.detach();  // Shut down steering
-      // brakeServo.detach();  // Shut down brakes
+      steerServo.detach();  // Shut down steering
+      brakeServo.detach();  // Shut down brakes
       analogWrite(throttlePin, 0); // Shut down throttle
   }
   
 }
 
 
+// Manage valid packet receive state, reset watchdog, and flash status LED
 void processPacket() {
-
-
-
-  //if (packetState == ERROR) Serial.println("ERROR");
 
   if (packetState == RXDONE) {
         
@@ -227,26 +224,29 @@ void processPacket() {
     watchdog = 0;
     
     // Reset intial values
-    watchdog = 0;
-    packetState = IDLE;
-    writeOutputs(); 
-    delay(1);
+    if (watchdog == 1) {
+      watchdog = 0;
+      steerServo.attach(steerPin);
+      brakeServo.attach(brakePin);
+    }
     
+    packetState = IDLE;
+    writeOutputs();    
 
     // Send packet acknowledgement
     digitalWrite(enableRS485, HIGH);  // enable RS485 transmit
-    Serial.print(ack);                // sendt serial packet
+    Serial.print(ack);                // send serial packet
     Serial.flush();                   // wait for transmission to complete 
     digitalWrite(enableRS485,LOW);    // disable RS485 transmit
     
-    digitalWrite(statusLED, LOW);
+    digitalWrite(statusLED, LOW);     // turn off status LED
     activityFlag = 1;
-    activityLEDTimer = millis()+10;
+    activityLEDTimer = millis();
 
   }
 
-   // Turn off activityLED after a delay
-   if (activityFlag == 1 && millis() > activityLEDTimer) {
+   // Turn on status LED after a delay
+   if (activityFlag == 1 && (millis() - activityLEDTimer) > 10) {
      activityFlag = 0;
      digitalWrite(statusLED, HIGH);
    }
