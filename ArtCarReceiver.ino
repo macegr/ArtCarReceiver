@@ -6,17 +6,18 @@
 
 // Included libraries
 #include <Servo.h>
+#include <EEPROM.h>
 
 // Steering output range
 // 1000 to 2000 microseconds is full RC servo range
-#define steerMax 2000
-#define steerMin 1000
+#define steerMax 2500
+#define steerMin 500
 #define steerDefault 1500
 
 // Braking output range
 // 1000 to 2000 microseconds is full RC servo range
-#define brakeMax 2000
-#define brakeMin 1000
+#define brakeMax 2400
+#define brakeMin 600
 #define brakeDefault 1000
 
 // Throttle output range
@@ -188,6 +189,7 @@ void writeOutputs() {
     // Write steering value to the steering servo controller
     steerValue = getPacketValue(0);
     steerServo.write(steerValue);
+    Serial.println(steerValue);
 
     // Write throttle value to the throttle PWM output
     throttleValue = getPacketValue(2);
@@ -214,30 +216,35 @@ void checkWatchdog() {
 }
 
 
+void sendAcknowledge() {    
+    digitalWrite(enableRS485, HIGH);  // enable RS485 transmit
+    Serial.print(ack);                // send serial packet
+    Serial.flush();                   // wait for transmission to complete 
+    digitalWrite(enableRS485,LOW);    // disable RS485 transmit
+}
+
+
 // Manage valid packet receive state, reset watchdog, and flash status LED
 void processPacket() {
 
+  // Check for successful received packet
   if (packetState == RXDONE) {
+
+    // Reset intial values
+    if (watchdog == 1) {
+      steerServo.attach(steerPin);
+      brakeServo.attach(brakePin);
+    }
         
     // Reset watchdogtimer
     watchdogTimer = millis();
     watchdog = 0;
     
-    // Reset intial values
-    if (watchdog == 1) {
-      watchdog = 0;
-      steerServo.attach(steerPin);
-      brakeServo.attach(brakePin);
-    }
-    
     packetState = IDLE;
     writeOutputs();    
 
     // Send packet acknowledgement
-    digitalWrite(enableRS485, HIGH);  // enable RS485 transmit
-    Serial.print(ack);                // send serial packet
-    Serial.flush();                   // wait for transmission to complete 
-    digitalWrite(enableRS485,LOW);    // disable RS485 transmit
+    sendAcknowledge();
     
     digitalWrite(statusLED, LOW);     // turn off status LED
     activityFlag = 1;
@@ -258,8 +265,8 @@ void processPacket() {
 void loop()
 {
 
-  checkWatchdog();
-  checkRS485();
-  processPacket();
+  checkWatchdog();  // Watch for failed communication 
+  checkRS485();     // Receive comms packets
+  processPacket();  // 
 
 }
